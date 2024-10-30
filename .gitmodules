@@ -1,0 +1,6 @@
+[submodule "SDL"]
+	path = SDL
+	url = https://github.com/libsdl-org/SDL
+[submodule "HandmadeMath"]
+	path = HandmadeMath
+	url = https://github.com/HandmadeMath/HandmadeMath
