@@ -1,7 +1,8 @@
 all: engine.exe base.spv color.spv grid.vert.spv grid.frag.spv
 
-engine.exe: main.c
-	cl -Zi -nologo -ISDL3-3.1.3/include -Feengine.exe main.c SDL3-3.1.3/lib/x64/SDL3.lib
+engine.exe: main.c ./SDL/VisualC/x64/Debug/SDL3.dll ./SDL3.dll ./SDL/VisualC/x64/Debug/SDL3.lib
+	copy .\SDL\VisualC\x64\Debug\SDL3.dll .\SDL3.dll
+	cl -Zi -nologo -ISDL/include -IHandmadeMath -Feengine.exe main.c SDL/VisualC/x64/Debug/SDL3.lib
 
 base.spv: base.vert
 	glslang base.vert -o base.spv -V -g
