@@ -4,3 +4,6 @@
 [submodule "HandmadeMath"]
 	path = HandmadeMath
 	url = https://github.com/HandmadeMath/HandmadeMath
+[submodule "objzero"]
+	path = objzero
+	url = https://github.com/jpcy/objzero

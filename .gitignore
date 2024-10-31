@@ -104,3 +104,6 @@ $RECYCLE.BIN/
 
 # Shader SPIR-V
 *.spv
+
+# Wavefront obj
+!models/*.obj

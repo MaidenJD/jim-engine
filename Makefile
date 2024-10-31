@@ -1,7 +1,7 @@
 all: engine.exe base.spv color.spv grid.vert.spv grid.frag.spv
 
-engine.exe: main.c SDL3.dll SDL/VisualC/x64/Debug/SDL3.lib
-	cl -Zi -nologo -ISDL/include -IHandmadeMath -Feengine.exe main.c SDL/VisualC/x64/Debug/SDL3.lib
+engine.exe: objzero/objzero.c main.c SDL3.dll SDL/VisualC/x64/Debug/SDL3.lib
+	cl -Zi -nologo -ISDL/include -IHandmadeMath -Iobjzero -Feengine.exe main.c objzero/objzero.c SDL/VisualC/x64/Debug/SDL3.lib
 
 SDL3.dll: SDL/VisualC/SDL/x64/Release/SDL3.lib
 	copy .\SDL\VisualC\SDL\x64\Release\SDL3.dll .\SDL3.dll

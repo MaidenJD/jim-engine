@@ -1,8 +1,13 @@
+#include <stddef.h>
+#include <string.h>
+
 #define SDL_MAIN_USE_CALLBACKS 1
 #include "SDL3/SDL_main.h"
 #include "SDL3/SDL.h"
 
 #include "HandmadeMath.h"
+
+#include "objzero.h"
 
 typedef struct CommonUniformBlock {
     float time;
@@ -42,6 +47,8 @@ typedef struct AppState {
 
     SDL_GPUBuffer *vertex_buffer;
     SDL_GPUBuffer *index_buffer;
+    Uint32 num_indices;
+
     SDL_GPUGraphicsPipeline *mesh_pipeline;
 } AppState;
 
@@ -259,6 +266,11 @@ void recreate_depth_texture() {
 }
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
+    objz_setVertexFormat(sizeof(VertexLayout), offsetof(VertexLayout, position), offsetof(VertexLayout, uv), SIZE_MAX);
+    objz_setIndexFormat(OBJZ_INDEX_FORMAT_U32);
+
+    SDL_SetHint(SDL_HINT_RENDER_VSYNC, "0");
+
     bool init_successful = SDL_Init(SDL_INIT_VIDEO);
     if (!init_successful) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to init SDL. %s", SDL_GetError());
@@ -292,9 +304,11 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         return SDL_APP_FAILURE;
     }
 
+    objzModel *model = objz_load("models/suzanne.obj");
+
     SDL_GPUBufferCreateInfo vertex_buffer_descriptor = {
         .usage = SDL_GPU_BUFFERUSAGE_VERTEX,
-        .size = sizeof(VertexLayout) * 8,
+        .size = sizeof(VertexLayout) * model->numVertices,
     };
 
     app_state.vertex_buffer = SDL_CreateGPUBuffer(app_state.gpu, &vertex_buffer_descriptor);
@@ -307,7 +321,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 
     SDL_GPUBufferCreateInfo index_buffer_descriptor = {
         .usage = SDL_GPU_BUFFERUSAGE_INDEX,
-        .size = sizeof(Uint32) * 36,
+        .size = sizeof(Uint32) * model->numIndices,
     };
 
     app_state.index_buffer = SDL_CreateGPUBuffer(app_state.gpu, &index_buffer_descriptor);
@@ -321,7 +335,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     {
         SDL_GPUTransferBufferCreateInfo vertex_transfer_buffer_descriptor = {
             .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-            .size = sizeof(VertexLayout) * 8
+            .size = sizeof(VertexLayout) * model->numVertices,
         };
 
         SDL_GPUTransferBuffer *vertex_transfer_buffer = SDL_CreateGPUTransferBuffer(app_state.gpu, &vertex_transfer_buffer_descriptor);
@@ -338,22 +352,16 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
                 return SDL_APP_FAILURE;
             }
 
-            vertices[0] = (VertexLayout) {{-1, -1, -1}, {0, 0}}; // Vertex 0
-            vertices[1] = (VertexLayout) {{ 1, -1, -1}, {1, 0}}; // Vertex 1
-            vertices[2] = (VertexLayout) {{ 1,  1, -1}, {1, 1}}; // Vertex 2
-            vertices[3] = (VertexLayout) {{-1,  1, -1}, {0, 1}}; // Vertex 3
-            vertices[4] = (VertexLayout) {{-1, -1,  1}, {0, 0}}; // Vertex 4
-            vertices[5] = (VertexLayout) {{ 1, -1,  1}, {1, 0}}; // Vertex 5
-            vertices[6] = (VertexLayout) {{ 1,  1,  1}, {1, 1}}; // Vertex 6
-            vertices[7] = (VertexLayout) {{-1,  1,  1}, {0, 1}}; // Vertex 7
-
+            memcpy(vertices, model->vertices, vertex_buffer_descriptor.size);
 
             SDL_UnmapGPUTransferBuffer(app_state.gpu, vertex_transfer_buffer);
         }
 
+        app_state.num_indices = model->numIndices;
+
         SDL_GPUTransferBufferCreateInfo index_transfer_buffer_descriptor = {
             .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-            .size = sizeof(VertexLayout) * 36
+            .size = sizeof(Uint32) * app_state.num_indices,
         };
 
         SDL_GPUTransferBuffer *index_transfer_buffer = SDL_CreateGPUTransferBuffer(app_state.gpu, &index_transfer_buffer_descriptor);
@@ -370,32 +378,12 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
                 return SDL_APP_FAILURE;
             }
 
-            // Face 1 (front)
-            indices[0]  = 2; indices[1]  = 1; indices[2]  = 0;
-            indices[3]  = 0; indices[4]  = 3; indices[5]  = 2;
-
-            // // Face 2 (back)
-            indices[6]  = 4;  indices[7] = 5;  indices[8] = 6;
-            indices[9]  = 6; indices[10] = 7; indices[11] = 4;
-
-            //  // Face 3 (bottom)
-            indices[12] = 0; indices[13] = 1; indices[14] = 5;
-            indices[15] = 5; indices[16] = 4; indices[17] = 0;
-
-            //  // Face 4 (top)
-            indices[18] = 2; indices[19] = 3; indices[20] = 7;
-            indices[21] = 7; indices[22] = 6; indices[23] = 2;
-
-            //  // Face 5 (left)
-            indices[24] = 7; indices[25] = 3; indices[26] = 0;
-            indices[27] = 0; indices[28] = 4; indices[29] = 7;
-
-            //  // Face 6 (right)
-            indices[30] = 6; indices[31] = 5; indices[32] = 1;
-            indices[33] = 1; indices[34] = 2; indices[35] = 6;
+            memcpy(indices, model->indices, index_buffer_descriptor.size);
 
             SDL_UnmapGPUTransferBuffer(app_state.gpu, index_transfer_buffer);
         }
+
+        objz_destroy(model);
 
         SDL_GPUCommandBuffer *command_buffer = SDL_AcquireGPUCommandBuffer(app_state.gpu);
         if (!command_buffer) {
@@ -413,7 +401,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 
         SDL_GPUBufferRegion destination = {
             .buffer = app_state.vertex_buffer,
-            .size = sizeof(VertexLayout) * 8,
+            .size = vertex_buffer_descriptor.size,
         };
 
         SDL_UploadToGPUBuffer(pass, &source, &destination, false);
@@ -424,7 +412,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 
         destination = (SDL_GPUBufferRegion) {
             .buffer = app_state.index_buffer,
-            .size = sizeof(Uint32) * 36,
+            .size = index_buffer_descriptor.size,
         };
 
         SDL_UploadToGPUBuffer(pass, &source, &destination, false);
@@ -481,7 +469,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     float phase = time * (HMM_PI * 2.0f) * 0.1f;
 
-    HMM_Mat4 view_matrix = HMM_LookAt_RH(HMM_V3(/*HMM_CosF(phase) * 5.0f*/0, HMM_SinF(phase) * 5.0f, /*HMM_SinF(phase) * 5.0f*/-5), HMM_V3(0, 0, 0), HMM_V3(0, 1, 0));
+    HMM_Mat4 view_matrix = HMM_LookAt_RH(HMM_V3(/*HMM_CosF(phase) * 5.0f*/0, /*HMM_SinF(phase) * 5.0f*/1, /*HMM_SinF(phase) * 5.0f*/3), HMM_V3(0, 0, 0), HMM_V3(0, 1, 0));
     HMM_Mat4 projection_matrix = HMM_Perspective_RH_NO(90.0f * HMM_DegToRad, aspect_ratio, 0.3f, 10000.0f);
     app_state.common_uniforms.view_projection_matrix = HMM_MulM4(projection_matrix, view_matrix);
     app_state.vertex_uniforms.inv_view_projection_matrix = HMM_InvGeneralM4(app_state.common_uniforms.view_projection_matrix);
@@ -536,9 +524,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         SDL_BindGPUGraphicsPipeline(pass, app_state.mesh_pipeline);
         SDL_BindGPUVertexBuffers(pass, 0, (SDL_GPUBufferBinding[]) {{.buffer = app_state.vertex_buffer}}, 1);
         SDL_BindGPUIndexBuffer(pass, &(SDL_GPUBufferBinding) {.buffer = app_state.index_buffer}, SDL_GPU_INDEXELEMENTSIZE_32BIT);
-        app_state.per_instance_vertex_uniforms.model_matrix = HMM_Translate(HMM_V3(0, HMM_SinF(phase * 2.0f) * 5.0, 0));
+        app_state.per_instance_vertex_uniforms.model_matrix = HMM_Rotate_RH(time * 45.0 * HMM_DegToRad, HMM_V3(0, 1, 0));
         SDL_PushGPUVertexUniformData(command_buffer, 2, &app_state.per_instance_vertex_uniforms, sizeof(PerInstanceVertexUniformBlock));
-        SDL_DrawGPUIndexedPrimitives(pass, 36, instance_count, 0, 0, 0);
+        SDL_DrawGPUIndexedPrimitives(pass, app_state.num_indices, instance_count, 0, 0, 0);
         
         SDL_EndGPURenderPass(pass);
     }
