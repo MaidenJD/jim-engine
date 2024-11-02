@@ -59,7 +59,7 @@ void main() {
     grid_mask = mix(grid_mask, 1.0, grid(uv, 0.01, 10));
 
     out_color = vec4(0.5.rrr, grid_mask * step(0, t));
-    out_color.rgb = mix(out_color.rgb, vec3(0.2, 0.2, 0.8), (abs(world_position.x) < 0.1).rrr);
+    out_color.rgb = mix(out_color.rgb, vec3(0.3, 0.3, 0.8), (abs(world_position.x) < 0.1).rrr);
     out_color.rgb = mix(out_color.rgb, vec3(0.8, 0.3, 0.3), (abs(world_position.z) < 0.1).rrr);
 
     vec4 clip_position = common_uniforms.view_projection_matrix * vec4(world_position, 1.0);
