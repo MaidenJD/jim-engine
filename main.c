@@ -9,6 +9,8 @@
 
 #include "objzero.h"
 
+#define NS_PER_UPDATE (1.0 / 60.0 * SDL_NS_PER_SECOND)
+
 typedef struct CommonUniformBlock {
     float time;
     float instance_count;
@@ -93,14 +95,15 @@ void InitCamera(Camera *camera) {
 
     camera->base.transform = t;
     camera->fov = 90.0f;
-    camera->turn_rate = 180.0f;
-    camera->pitch_rate = 180.0f;
-    camera->movement_speed = 10.0f;
+    camera->turn_rate = 30.0f;
+    camera->pitch_rate = 30.0f;
+    camera->movement_speed = 3.0f;
 }
 
 typedef struct AppState {
     bool is_valid;
     Uint64 nanoseconds_since_init;
+    Uint64 nanoseconds_update_lag;
 
     InputMode input_mode;
 
@@ -565,23 +568,23 @@ void UpdateCamera(AppState *app_state, Camera *camera, float dt) {
         if (keys[SDL_SCANCODE_LCTRL]) { movement_input = HMM_AddV3(movement_input, HMM_V3( 0, -1,  0)); }
         if (keys[SDL_SCANCODE_SPACE]) { movement_input = HMM_AddV3(movement_input, HMM_V3( 0,  1,  0)); }
 
-        HMM_Vec3 movement_delta = HMM_RotateV3Q(HMM_MulV3F(movement_input, dt * camera->movement_speed), camera->base.transform.rotation);
+        if (HMM_LenSqrV3(movement_input) > 0) {
+            movement_input = HMM_NormV3(movement_input);
+            HMM_Vec3 movement_delta = HMM_RotateV3Q(HMM_MulV3F(movement_input, dt * camera->movement_speed), camera->base.transform.rotation);
 
-        HMM_Vec3 *location = &camera->base.transform.location;
-        *location = HMM_AddV3(*location, movement_delta);
+            HMM_Vec3 *location = &camera->base.transform.location;
+            *location = HMM_AddV3(*location, movement_delta);
+        }
     }
 };
 
 SDL_AppResult Update(AppState *app_state, float dt) {
-    SDL_PumpEvents();
-
     UpdateCamera(app_state, &app_state->camera, dt);
 
     return SDL_APP_CONTINUE;
 }
 
 SDL_AppResult Render(AppState *app_state) {
-
     //  Only render for first frame, when previous frame has finished;
     if (app_state->render_fence) {
         bool ready_for_new_frame = SDL_QueryGPUFence(app_state->gpu, app_state->render_fence);
@@ -675,13 +678,17 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     AppState *app_state = appstate;
 
     Uint64 nanoseconds_since_init = SDL_GetTicksNS();
-    Uint64 delta_nanoseconds = nanoseconds_since_init - app_state->nanoseconds_since_init;
+    Uint64 nanosecond_delta = nanoseconds_since_init - app_state->nanoseconds_since_init;
     app_state->nanoseconds_since_init = nanoseconds_since_init;
+    app_state->nanoseconds_update_lag += nanosecond_delta;
 
-    float time = app_state->nanoseconds_since_init / (double) SDL_NS_PER_SECOND;
-    float dt = (float) (delta_nanoseconds / (double) SDL_NS_PER_SECOND);
+    SDL_PumpEvents();
 
-    Update(app_state, dt);
+    while (app_state->nanoseconds_update_lag >= NS_PER_UPDATE) {
+        Update(app_state, NS_PER_UPDATE / (double) SDL_NS_PER_SECOND);
+        app_state->nanoseconds_update_lag -= NS_PER_UPDATE;
+    }
+
     Render(app_state);
 
     return SDL_APP_CONTINUE;
