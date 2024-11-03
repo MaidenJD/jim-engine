@@ -15,7 +15,12 @@ typedef struct CommonUniformBlock {
     float time;
     float instance_count;
 
+    HMM_Mat4 view_matrix;
+    HMM_Mat4 projection_matrix;
     HMM_Mat4 view_projection_matrix;
+
+    HMM_Mat4 inv_view_matrix;
+    HMM_Mat4 inv_projection_matrix;
 } CommonUniformBlock;
 
 typedef struct VertexUniformBlock {
@@ -24,6 +29,7 @@ typedef struct VertexUniformBlock {
 
 typedef struct PerInstanceVertexUniformBlock {
     HMM_Mat4 model_matrix;
+    HMM_Mat4 model_rotation_matrix;
 } PerInstanceVertexUniformBlock;
 
 typedef struct FragmentUniformBlock {
@@ -88,6 +94,24 @@ typedef struct Camera {
     float movement_speed;
 } Camera;
 
+typedef struct Mesh {
+    Entity base;
+
+    SDL_GPUBuffer *vertex_buffer;
+    SDL_GPUBuffer *index_buffer;
+    Uint32 num_indices;
+} Mesh;
+
+void DestroyMesh(SDL_GPUDevice *gpu, Mesh *mesh) {
+    if (mesh->vertex_buffer) {
+        SDL_ReleaseGPUBuffer(gpu, mesh->vertex_buffer);
+    }
+
+    if (mesh->index_buffer) {
+        SDL_ReleaseGPUBuffer(gpu, mesh->index_buffer);
+    }
+}
+
 void InitCamera(Camera *camera) {
     Transform t = DEFAULT_TRANSFORM;
     t.location.Z = 5;
@@ -108,13 +132,14 @@ typedef struct AppState {
     InputMode input_mode;
 
     Camera camera;
+    Mesh mesh;
 
     SDL_GPUFence *render_fence;
 
     CommonUniformBlock common_uniforms;
     VertexUniformBlock vertex_uniforms;
     PerInstanceVertexUniformBlock per_instance_vertex_uniforms;
-    VertexUniformBlock fragment_uniforms;
+    FragmentUniformBlock fragment_uniforms;
     // PerInstanceFragmentUniformBlock per_instance_fragment_uniforms;
 
     SDL_GPUTexture *depth_texture;
@@ -123,18 +148,148 @@ typedef struct AppState {
     SDL_GPUDevice *gpu;
 
     SDL_GPUGraphicsPipeline *grid_pipeline;
-
-    SDL_GPUBuffer *vertex_buffer;
-    SDL_GPUBuffer *index_buffer;
-    Uint32 num_indices;
-
     SDL_GPUGraphicsPipeline *mesh_pipeline;
 } AppState;
 
 typedef struct VertexLayout {
     HMM_Vec3 position;
     HMM_Vec2 uv;
+    HMM_Vec3 normal;
 } VertexLayout;
+
+SDL_AppResult CreateMeshFromFile(Mesh *mesh, SDL_GPUDevice *gpu, const char *filename) {
+    SDL_zerop(mesh);
+    mesh->base.transform = DEFAULT_TRANSFORM;
+
+    objzModel *model = objz_load(filename);
+
+    SDL_GPUBufferCreateInfo vertex_buffer_descriptor = {
+        .usage = SDL_GPU_BUFFERUSAGE_VERTEX,
+        .size = sizeof(VertexLayout) * model->numVertices,
+    };
+
+    mesh->vertex_buffer = SDL_CreateGPUBuffer(gpu, &vertex_buffer_descriptor);
+    if (!mesh->vertex_buffer) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create vertex buffer mesh \"%s\". %s", filename, SDL_GetError());
+        return false;
+    }
+
+    SDL_SetGPUBufferName(gpu, mesh->vertex_buffer, "vertex_buffer");
+
+    SDL_GPUBufferCreateInfo index_buffer_descriptor = {
+        .usage = SDL_GPU_BUFFERUSAGE_INDEX,
+        .size = sizeof(Uint32) * model->numIndices,
+    };
+
+    mesh->index_buffer = SDL_CreateGPUBuffer(gpu, &index_buffer_descriptor);
+    if (!mesh->index_buffer) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create index buffer for mesh \"%s\". %s", filename, SDL_GetError());
+        return false;
+    }
+
+    SDL_SetGPUBufferName(gpu, mesh->index_buffer, "index_buffer");
+
+    // GPU Upload
+    {
+        SDL_GPUTransferBufferCreateInfo vertex_transfer_buffer_descriptor = {
+            .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+            .size = sizeof(VertexLayout) * model->numVertices,
+        };
+
+        SDL_GPUTransferBuffer *vertex_transfer_buffer = SDL_CreateGPUTransferBuffer(gpu, &vertex_transfer_buffer_descriptor);
+        if (!vertex_transfer_buffer) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create transfer buffer. %s", SDL_GetError());
+            return false;
+        }
+
+        {
+            VertexLayout *vertices = SDL_MapGPUTransferBuffer(gpu, vertex_transfer_buffer, false);
+            if (!vertices) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to map transfer buffer. %s", SDL_GetError());
+                SDL_ReleaseGPUTransferBuffer(gpu, vertex_transfer_buffer);
+                return false;
+            }
+
+            memcpy(vertices, model->vertices, vertex_buffer_descriptor.size);
+
+            SDL_UnmapGPUTransferBuffer(gpu, vertex_transfer_buffer);
+        }
+
+        mesh->num_indices = model->numIndices;
+
+        SDL_GPUTransferBufferCreateInfo index_transfer_buffer_descriptor = {
+            .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+            .size = sizeof(Uint32) * mesh->num_indices,
+        };
+
+        SDL_GPUTransferBuffer *index_transfer_buffer = SDL_CreateGPUTransferBuffer(gpu, &index_transfer_buffer_descriptor);
+        if (!index_transfer_buffer) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create transfer buffer. %s", SDL_GetError());
+            return false;
+        }
+
+        {
+            Uint32 *indices = SDL_MapGPUTransferBuffer(gpu, index_transfer_buffer, false);
+            if (!indices) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to map transfer buffer. %s", SDL_GetError());
+                SDL_ReleaseGPUTransferBuffer(gpu, index_transfer_buffer);
+                return false;
+            }
+
+            memcpy(indices, model->indices, index_buffer_descriptor.size);
+
+            SDL_UnmapGPUTransferBuffer(gpu, index_transfer_buffer);
+        }
+
+        objz_destroy(model);
+
+        SDL_GPUCommandBuffer *command_buffer = SDL_AcquireGPUCommandBuffer(gpu);
+        if (!command_buffer) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to acquire command buffer. %s", SDL_GetError());
+            SDL_ReleaseGPUTransferBuffer(gpu, vertex_transfer_buffer);
+            SDL_ReleaseGPUTransferBuffer(gpu, index_transfer_buffer);
+            return false;
+        }
+
+        SDL_GPUCopyPass *pass = SDL_BeginGPUCopyPass(command_buffer);
+
+        SDL_GPUTransferBufferLocation source = {
+            .transfer_buffer = vertex_transfer_buffer,
+        };
+
+        SDL_GPUBufferRegion destination = {
+            .buffer = mesh->vertex_buffer,
+            .size = vertex_buffer_descriptor.size,
+        };
+
+        SDL_UploadToGPUBuffer(pass, &source, &destination, false);
+
+        source = (SDL_GPUTransferBufferLocation) {
+            .transfer_buffer = index_transfer_buffer,
+        };
+
+        destination = (SDL_GPUBufferRegion) {
+            .buffer = mesh->index_buffer,
+            .size = index_buffer_descriptor.size,
+        };
+
+        SDL_UploadToGPUBuffer(pass, &source, &destination, false);
+
+        SDL_EndGPUCopyPass(pass);
+
+        bool submitted_command_buffer = SDL_SubmitGPUCommandBuffer(command_buffer);
+
+        SDL_ReleaseGPUTransferBuffer(gpu, vertex_transfer_buffer);
+        SDL_ReleaseGPUTransferBuffer(gpu, index_transfer_buffer);
+
+        if (!submitted_command_buffer) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to submit command buffer. %s", SDL_GetError());
+            return false;
+        }
+    }
+
+    return true;
+}
 
 SDL_GPUShader *create_shader_from_file(SDL_GPUDevice *gpu, const char *filename, SDL_GPUShaderStage stage, Uint32 num_samplers, Uint32 num_storage_buffers, Uint32 num_storage_textures, Uint32 num_uniform_buffers) {
     SDL_IOStream *file_io = SDL_IOFromFile(filename, "rb");
@@ -281,20 +436,26 @@ bool create_mesh_pipeline(AppState *app_state) {
                     .pitch = sizeof(VertexLayout),
                 }
             },
-            .num_vertex_attributes = 2,
+            .num_vertex_attributes = 3,
             .vertex_attributes = (SDL_GPUVertexAttribute[]) {
                 {
                     .buffer_slot = 0,
-                    .offset = 0,
+                    .offset = offsetof(VertexLayout, position),
                     .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,
                     .location = 0,
                 },
                 {
                     .buffer_slot = 0,
-                    .offset = sizeof(HMM_Vec3),
+                    .offset = offsetof(VertexLayout, uv),
                     .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2,
                     .location = 1,
-                }
+                },
+                {
+                    .buffer_slot = 0,
+                    .offset = offsetof(VertexLayout, normal),
+                    .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,
+                    .location = 2,
+                },
             }
         },
         .rasterizer_state = {
@@ -357,7 +518,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     //     app_state->camera.base.transform = t;
     // }
 
-    objz_setVertexFormat(sizeof(VertexLayout), offsetof(VertexLayout, position), offsetof(VertexLayout, uv), SIZE_MAX);
+    objz_setVertexFormat(sizeof(VertexLayout), offsetof(VertexLayout, position), offsetof(VertexLayout, uv), offsetof(VertexLayout, normal));
     objz_setIndexFormat(OBJZ_INDEX_FORMAT_U32);
 
     bool init_successful = SDL_Init(SDL_INIT_VIDEO);
@@ -393,130 +554,10 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         return SDL_APP_FAILURE;
     }
 
-    objzModel *model = objz_load("models/suzanne.obj");
-
-    SDL_GPUBufferCreateInfo vertex_buffer_descriptor = {
-        .usage = SDL_GPU_BUFFERUSAGE_VERTEX,
-        .size = sizeof(VertexLayout) * model->numVertices,
-    };
-
-    app_state->vertex_buffer = SDL_CreateGPUBuffer(app_state->gpu, &vertex_buffer_descriptor);
-    if (!app_state->vertex_buffer) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create vertex buffer. %s", SDL_GetError());
+    bool mesh_loaded = CreateMeshFromFile(&app_state->mesh, app_state->gpu, "models\\burger.obj");
+    if (!mesh_loaded) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load mesh \"models\\burger.obj\". %s", SDL_GetError());
         return SDL_APP_FAILURE;
-    }
-
-    SDL_SetGPUBufferName(app_state->gpu, app_state->vertex_buffer, "vertex_buffer");
-
-    SDL_GPUBufferCreateInfo index_buffer_descriptor = {
-        .usage = SDL_GPU_BUFFERUSAGE_INDEX,
-        .size = sizeof(Uint32) * model->numIndices,
-    };
-
-    app_state->index_buffer = SDL_CreateGPUBuffer(app_state->gpu, &index_buffer_descriptor);
-    if (!app_state->index_buffer) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create index buffer. %s", SDL_GetError());
-        return SDL_APP_FAILURE;
-    }
-
-    SDL_SetGPUBufferName(app_state->gpu, app_state->index_buffer, "index_buffer");
-
-    {
-        SDL_GPUTransferBufferCreateInfo vertex_transfer_buffer_descriptor = {
-            .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-            .size = sizeof(VertexLayout) * model->numVertices,
-        };
-
-        SDL_GPUTransferBuffer *vertex_transfer_buffer = SDL_CreateGPUTransferBuffer(app_state->gpu, &vertex_transfer_buffer_descriptor);
-        if (!vertex_transfer_buffer) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create transfer buffer. %s", SDL_GetError());
-            return SDL_APP_FAILURE;
-        }
-
-        {
-            VertexLayout *vertices = SDL_MapGPUTransferBuffer(app_state->gpu, vertex_transfer_buffer, false);
-            if (!vertices) {
-                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to map transfer buffer. %s", SDL_GetError());
-                SDL_ReleaseGPUTransferBuffer(app_state->gpu, vertex_transfer_buffer);
-                return SDL_APP_FAILURE;
-            }
-
-            memcpy(vertices, model->vertices, vertex_buffer_descriptor.size);
-
-            SDL_UnmapGPUTransferBuffer(app_state->gpu, vertex_transfer_buffer);
-        }
-
-        app_state->num_indices = model->numIndices;
-
-        SDL_GPUTransferBufferCreateInfo index_transfer_buffer_descriptor = {
-            .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-            .size = sizeof(Uint32) * app_state->num_indices,
-        };
-
-        SDL_GPUTransferBuffer *index_transfer_buffer = SDL_CreateGPUTransferBuffer(app_state->gpu, &index_transfer_buffer_descriptor);
-        if (!index_transfer_buffer) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create transfer buffer. %s", SDL_GetError());
-            return SDL_APP_FAILURE;
-        }
-
-        {
-            Uint32 *indices = SDL_MapGPUTransferBuffer(app_state->gpu, index_transfer_buffer, false);
-            if (!indices) {
-                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to map transfer buffer. %s", SDL_GetError());
-                SDL_ReleaseGPUTransferBuffer(app_state->gpu, index_transfer_buffer);
-                return SDL_APP_FAILURE;
-            }
-
-            memcpy(indices, model->indices, index_buffer_descriptor.size);
-
-            SDL_UnmapGPUTransferBuffer(app_state->gpu, index_transfer_buffer);
-        }
-
-        objz_destroy(model);
-
-        SDL_GPUCommandBuffer *command_buffer = SDL_AcquireGPUCommandBuffer(app_state->gpu);
-        if (!command_buffer) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to acquire command buffer. %s", SDL_GetError());
-            SDL_ReleaseGPUTransferBuffer(app_state->gpu, vertex_transfer_buffer);
-            SDL_ReleaseGPUTransferBuffer(app_state->gpu, index_transfer_buffer);
-            return SDL_APP_FAILURE;
-        }
-
-        SDL_GPUCopyPass *pass = SDL_BeginGPUCopyPass(command_buffer);
-
-        SDL_GPUTransferBufferLocation source = {
-            .transfer_buffer = vertex_transfer_buffer,
-        };
-
-        SDL_GPUBufferRegion destination = {
-            .buffer = app_state->vertex_buffer,
-            .size = vertex_buffer_descriptor.size,
-        };
-
-        SDL_UploadToGPUBuffer(pass, &source, &destination, false);
-
-        source = (SDL_GPUTransferBufferLocation) {
-            .transfer_buffer = index_transfer_buffer,
-        };
-
-        destination = (SDL_GPUBufferRegion) {
-            .buffer = app_state->index_buffer,
-            .size = index_buffer_descriptor.size,
-        };
-
-        SDL_UploadToGPUBuffer(pass, &source, &destination, false);
-
-        SDL_EndGPUCopyPass(pass);
-
-        bool submitted_command_buffer = SDL_SubmitGPUCommandBuffer(command_buffer);
-
-        SDL_ReleaseGPUTransferBuffer(app_state->gpu, vertex_transfer_buffer);
-        SDL_ReleaseGPUTransferBuffer(app_state->gpu, index_transfer_buffer);
-
-        if (!submitted_command_buffer) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to submit command buffer. %s", SDL_GetError());
-            return SDL_APP_FAILURE;
-        }
     }
 
     bool created_mesh_pipeline = create_mesh_pipeline(app_state);
@@ -581,6 +622,17 @@ void UpdateCamera(AppState *app_state, Camera *camera, float dt) {
 SDL_AppResult Update(AppState *app_state, float dt) {
     UpdateCamera(app_state, &app_state->camera, dt);
 
+    app_state->fragment_uniforms.light_direction = HMM_V3(0, -1, 0);
+
+    float theta = app_state->nanoseconds_since_init / (double) SDL_NS_PER_SECOND * 45.0f * HMM_DegToRad;
+
+    HMM_Vec3 *location = &app_state->mesh.base.transform.location;
+    location->X = HMM_SinF(theta) * 2.0f;
+    location->Y = HMM_CosF(theta) * 2.0f;
+
+    HMM_Quat *rotation = &app_state->mesh.base.transform.rotation;
+    *rotation = HMM_M4ToQ_RH(HMM_Rotate_RH(theta, HMM_V3(0, 0, 1)));
+
     return SDL_APP_CONTINUE;
 }
 
@@ -609,7 +661,12 @@ SDL_AppResult Render(AppState *app_state) {
 
     HMM_Mat4 view_matrix = HMM_InvGeneralM4(CalcTransformMatrix(app_state->camera.base.transform)); //HMM_LookAt_RH(HMM_V3(/*HMM_CosF(phase) * 5.0f*/0, /*HMM_SinF(phase) * 5.0f*/1, /*HMM_SinF(phase) * 5.0f*/3), HMM_V3(0, 0, 0), HMM_V3(0, 1, 0));
     HMM_Mat4 projection_matrix = HMM_Perspective_RH_NO(app_state->camera.fov * HMM_DegToRad, aspect_ratio, 0.3f, 10000.0f);
+    app_state->common_uniforms.view_matrix = view_matrix;
+    app_state->common_uniforms.inv_view_matrix = HMM_InvGeneralM4(view_matrix);
+    app_state->common_uniforms.projection_matrix = projection_matrix;
+    app_state->common_uniforms.inv_projection_matrix = HMM_InvGeneralM4(projection_matrix);
     app_state->common_uniforms.view_projection_matrix = HMM_MulM4(projection_matrix, view_matrix);
+
     app_state->vertex_uniforms.inv_view_projection_matrix = HMM_InvGeneralM4(app_state->common_uniforms.view_projection_matrix);
 
     SDL_GPUCommandBuffer *command_buffer = SDL_AcquireGPUCommandBuffer(app_state->gpu);
@@ -656,15 +713,17 @@ SDL_AppResult Render(AppState *app_state) {
     if (pass) {
         SDL_BindGPUGraphicsPipeline(pass, app_state->grid_pipeline);
         app_state->per_instance_vertex_uniforms.model_matrix = HMM_M4D(1);
+        app_state->per_instance_vertex_uniforms.model_rotation_matrix = HMM_M4D(1);
         SDL_PushGPUVertexUniformData(command_buffer, 2, &app_state->per_instance_vertex_uniforms, sizeof(PerInstanceVertexUniformBlock));
         SDL_DrawGPUPrimitives(pass, 6, 1, 0, 0);
 
         SDL_BindGPUGraphicsPipeline(pass, app_state->mesh_pipeline);
-        SDL_BindGPUVertexBuffers(pass, 0, (SDL_GPUBufferBinding[]) {{.buffer = app_state->vertex_buffer}}, 1);
-        SDL_BindGPUIndexBuffer(pass, &(SDL_GPUBufferBinding) {.buffer = app_state->index_buffer}, SDL_GPU_INDEXELEMENTSIZE_32BIT);
-        app_state->per_instance_vertex_uniforms.model_matrix = HMM_Rotate_RH(time * 45.0 * HMM_DegToRad, HMM_V3(0, 1, 0));
+        SDL_BindGPUVertexBuffers(pass, 0, (SDL_GPUBufferBinding[]) {{.buffer = app_state->mesh.vertex_buffer}}, 1);
+        SDL_BindGPUIndexBuffer(pass, &(SDL_GPUBufferBinding) {.buffer = app_state->mesh.index_buffer}, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+        app_state->per_instance_vertex_uniforms.model_matrix = CalcTransformMatrix(app_state->mesh.base.transform);
+        app_state->per_instance_vertex_uniforms.model_rotation_matrix = HMM_QToM4(app_state->mesh.base.transform.rotation);
         SDL_PushGPUVertexUniformData(command_buffer, 2, &app_state->per_instance_vertex_uniforms, sizeof(PerInstanceVertexUniformBlock));
-        SDL_DrawGPUIndexedPrimitives(pass, app_state->num_indices, instance_count, 0, 0, 0);
+        SDL_DrawGPUIndexedPrimitives(pass, app_state->mesh.num_indices, instance_count, 0, 0, 0);
 
         SDL_EndGPURenderPass(pass);
     }
@@ -765,13 +824,7 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
         SDL_ReleaseGPUTexture(app_state->gpu, app_state->depth_texture);
     }
 
-    if (app_state->vertex_buffer) {
-        SDL_ReleaseGPUBuffer(app_state->gpu, app_state->vertex_buffer);
-    }
-
-    if (app_state->index_buffer) {
-        SDL_ReleaseGPUBuffer(app_state->gpu, app_state->index_buffer);
-    }
+    DestroyMesh(app_state->gpu, &app_state->mesh);
 
     if (app_state->window) {
         SDL_ReleaseWindowFromGPUDevice(app_state->gpu, app_state->window);

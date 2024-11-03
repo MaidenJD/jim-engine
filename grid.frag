@@ -1,4 +1,5 @@
-#version 450
+#version 460
+#extension GL_ARB_shading_language_include : require
 
 // Grid - based on the work of Ben Golus. (https://bgolus.medium.com/the-best-darn-grid-shader-yet-727f9278b9d8#1e7c)
 // tweaked from there for multiple grid scales, and major grid lines
@@ -10,16 +11,9 @@ layout (location = 1) in VertexOutput {
     vec3 far;
 } vertex_output;
 
-layout (set = 3, binding = 0) uniform CommonUniformBlock {
-    float time;
-    float instance_count;
-
-    mat4 view_projection_matrix;
-} common_uniforms;
-
-layout (set = 3, binding = 1) uniform FragmentUniformBlock {
-    vec3 light_direction;
-} fragment_uniforms;
+#define COMMON_UNIFORM_BINDING_SET 3
+#include "common_uniforms.glsl"
+#include "fragment_uniforms.glsl"
 
 float grid(vec2 uv, float line_width, float grid_scale) {
     uv *= grid_scale > 0.0 ? 1.0 / grid_scale : 0.0;
@@ -52,7 +46,7 @@ float grid(vec2 uv, float line_width, float grid_scale) {
 void main() {
     float t = -vertex_output.near.y / (vertex_output.far.y - vertex_output.near.y);
     vec3 world_position = vertex_output.near + t * (vertex_output.far - vertex_output.near);
-;
+
     vec2 uv = world_position.xz;
     float grid_mask = grid(uv, 0.01, 0.1);
     grid_mask = mix(grid_mask, 1.0, grid(uv, 0.01, 1));

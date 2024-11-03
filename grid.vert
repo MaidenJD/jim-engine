@@ -1,4 +1,5 @@
-#version 450
+#version 460
+#extension GL_ARB_shading_language_include : require
 
 //output
 layout (location = 1) out VertexOutput {
@@ -8,19 +9,10 @@ layout (location = 1) out VertexOutput {
     mat4 view_projection_matrix;
 } vertex_output;
 
-//uniforms
-layout (set = 1, binding = 0) uniform CommonUniformBlock {
-    float time;
-    float instance_count;
-} common_uniforms;
-
-layout (set = 1, binding = 1) uniform VertexUniformBlock {
-    mat4 inv_view_projection_matrix;
-} vertex_uniforms;
-
-layout (set = 1, binding = 2) uniform PerInstanceVertexUniformBlock {
-    mat4 model_matrix;
-} per_instance_vertex_uniforms;
+#define COMMON_UNIFORM_BINDING_SET 1
+#include "common_uniforms.glsl"
+#include "vertex_uniforms.glsl"
+#include "per_instance_vertex_uniforms.glsl"
 
 vec3 deproject_point(vec3 point) {
     vec4 deprojected_point = vertex_uniforms.inv_view_projection_matrix * vec4(point, 1.0);
