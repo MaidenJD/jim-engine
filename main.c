@@ -757,12 +757,6 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         return SDL_APP_FAILURE;
     }
 
-    if (event->type == SDL_EVENT_KEY_DOWN) {
-        if (event->key.key == SDLK_Q) {
-            return SDL_APP_SUCCESS;
-        }
-    }
-
     static HMM_Vec2 mouse_position_enter_camera_mode = { 0 };
 
     if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
@@ -782,6 +776,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
             app_state->input_mode = INPUT_MODE_NONE;
 
             SDL_SetWindowRelativeMouseMode(app_state->window, false);
+
             SDL_WarpMouseGlobal(mouse_position_enter_camera_mode.X, mouse_position_enter_camera_mode.Y);
         }
     }
