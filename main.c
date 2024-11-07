@@ -741,8 +741,6 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     app_state->nanoseconds_since_init = nanoseconds_since_init;
     app_state->nanoseconds_update_lag += nanosecond_delta;
 
-    SDL_PumpEvents();
-
     while (app_state->nanoseconds_update_lag >= NS_PER_UPDATE) {
         Update(app_state, NS_PER_UPDATE / (double) SDL_NS_PER_SECOND);
         app_state->nanoseconds_update_lag -= NS_PER_UPDATE;
@@ -765,13 +763,16 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         }
     }
 
+    static HMM_Vec2 mouse_position_enter_camera_mode = { 0 };
+
     if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
         if (event->button.button == SDL_BUTTON_RIGHT) {
             app_state->input_mode = INPUT_MODE_CAMERA;
 
+            SDL_GetGlobalMouseState(&mouse_position_enter_camera_mode.X, &mouse_position_enter_camera_mode.Y);
+
             //  Needed to eat first delta check, to avoid camera snapping
             SDL_GetRelativeMouseState(NULL, NULL);
-
             SDL_SetWindowRelativeMouseMode(app_state->window, true);
         }
     }
@@ -781,12 +782,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
             app_state->input_mode = INPUT_MODE_NONE;
 
             SDL_SetWindowRelativeMouseMode(app_state->window, false);
-
-            int w, h;
-            SDL_GetWindowSize(app_state->window, &w, &h);
-            HMM_Vec2 window_center = { w * 0.5f, h * 0.5f };
-
-            SDL_WarpMouseInWindow(app_state->window, window_center.X, window_center.Y);
+            SDL_WarpMouseGlobal(mouse_position_enter_camera_mode.X, mouse_position_enter_camera_mode.Y);
         }
     }
 
