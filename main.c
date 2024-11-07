@@ -9,6 +9,9 @@
 
 #include "objzero.h"
 
+#include "dcimgui.h"
+#include "backends/dcimgui_impl_sdl3.h"
+
 #define NS_PER_UPDATE (1.0 / 60.0 * SDL_NS_PER_SECOND)
 
 typedef struct CommonUniformBlock {
@@ -133,6 +136,8 @@ typedef struct AppState {
 
     Camera camera;
     Mesh mesh;
+
+    ImGuiContext *imgui;
 
     SDL_GPUFence *render_fence;
 
@@ -582,6 +587,9 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         return SDL_APP_FAILURE;
     }
 
+    ImGui_CreateContext(/* shared_font_atlas = */ NULL);
+    cImGui_ImplSDL3_InitForOther(app_state->window);
+
     app_state->nanoseconds_since_init = SDL_GetTicksNS();
     app_state->is_valid = true;
     return SDL_APP_CONTINUE;
@@ -798,6 +806,10 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
     AppState *app_state = appstate;
 
     SDL_WaitForGPUIdle(app_state->gpu);
+
+    if (app_state->imgui) {
+        ImGui_DestroyContext(app_state->imgui);
+    }
 
     if (app_state->render_fence) {
         SDL_ReleaseGPUFence(app_state->gpu, app_state->render_fence);
