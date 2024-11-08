@@ -107,3 +107,6 @@ $RECYCLE.BIN/
 
 # Wavefront obj
 !models/*.obj
+
+# Imgui
+imgui.ini

@@ -11,6 +11,7 @@
 
 #include "dcimgui.h"
 #include "backends/dcimgui_impl_sdl3.h"
+#include "custom_imgui_impl_sdlgpu3.h"
 
 #define NS_PER_UPDATE (1.0 / 60.0 * SDL_NS_PER_SECOND)
 
@@ -589,6 +590,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 
     ImGui_CreateContext(/* shared_font_atlas = */ NULL);
     cImGui_ImplSDL3_InitForOther(app_state->window);
+    cImGui_ImplSDLGpu3_Init(app_state->gpu);
 
     app_state->nanoseconds_since_init = SDL_GetTicksNS();
     app_state->is_valid = true;
@@ -736,6 +738,9 @@ SDL_AppResult Render(AppState *app_state) {
         SDL_EndGPURenderPass(pass);
     }
 
+    ImGui_Render();
+    cImGui_ImplSDLGpu3_RenderDrawData(ImGui_GetDrawData(), app_state->gpu);
+
     app_state->render_fence = SDL_SubmitGPUCommandBufferAndAcquireFence(command_buffer);
 
     return SDL_APP_CONTINUE;
@@ -749,6 +754,10 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     app_state->nanoseconds_since_init = nanoseconds_since_init;
     app_state->nanoseconds_update_lag += nanosecond_delta;
 
+    cImGui_ImplSDLGpu3_NewFrame();
+    cImGui_ImplSDL3_NewFrame();
+    ImGui_NewFrame();
+
     while (app_state->nanoseconds_update_lag >= NS_PER_UPDATE) {
         Update(app_state, NS_PER_UPDATE / (double) SDL_NS_PER_SECOND);
         app_state->nanoseconds_update_lag -= NS_PER_UPDATE;
@@ -756,10 +765,14 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     Render(app_state);
 
+    ImGui_EndFrame();
+
     return SDL_APP_CONTINUE;
 }
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     AppState *app_state = appstate;
+
+    cImGui_ImplSDL3_ProcessEvent(event);
 
     if (!app_state->is_valid) {
         return SDL_APP_FAILURE;
@@ -808,6 +821,8 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
     SDL_WaitForGPUIdle(app_state->gpu);
 
     if (app_state->imgui) {
+        cImGui_ImplSDLGpu3_Shutdown();
+        cImGui_ImplSDL3_Shutdown();
         ImGui_DestroyContext(app_state->imgui);
     }
 

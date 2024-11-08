@@ -1,7 +1,7 @@
 all: base.spv color.spv grid.vert.spv grid.frag.spv engine.exe
 
-engine.exe: .\objzero\objzero.c main.c SDL3.dll .\dear_bindings\lib\dcimgui.lib
-	cl -Zi -nologo -ISDL/include -IHandmadeMath -Iobjzero -Iimgui -Idear_bindings/generated -Feengine.exe main.c objzero\objzero.c .\SDL\VisualC\SDL\x64\Release\SDL3.lib .\dear_bindings\lib\dcimgui.lib
+engine.exe: .\objzero\objzero.c main.c custom_imgui_impl_sdlgpu3.c custom_imgui_impl_sdlgpu3.h SDL3.dll .\dear_bindings\lib\dcimgui.lib
+	cl -Zi -nologo -ISDL/include -IHandmadeMath -Iobjzero -Iimgui -Idear_bindings/generated -Feengine.exe main.c objzero\objzero.c custom_imgui_impl_sdlgpu3.c .\SDL\VisualC\SDL\x64\Release\SDL3.lib .\dear_bindings\lib\dcimgui.lib
 
 SDL3.dll: $(shell where /R .\SDL\src *.*)
 	msbuild .\SDL\VisualC\SDL\SDL.vcxproj -p:Configuration=Release -p:Platform=x64
